@@ -1,0 +1,78 @@
+# =============================================================
+#  DADOS — nunca versionar (LGPD + volume)
+# =============================================================
+# Ignora TODO o conteúdo das zonas de dados, mas preserva a estrutura
+# de pastas através dos .gitkeep (ver exceções mais abaixo).
+data/01_raw/*
+data/02_trusted/*
+data/03_refined/*
+
+# Reforço por extensão, caso apareçam fora das pastas acima.
+*.csv
+*.tsv
+*.parquet
+
+# O payload é artefacto gerado — o downstream lê-o do object store / zona refined,
+# não do Git. (O CONTRATO em contracts/ continua versionado.)
+payload_*.json
+serie_*.parquet
+core_processos.parquet
+
+# Exceções: manter as pastas no repositório e permitir amostras de teste.
+!data/01_raw/.gitkeep
+!data/02_trusted/.gitkeep
+!data/03_refined/.gitkeep
+!tests/fixtures/*.csv          # micro-amostras controladas para os testes
+
+# =============================================================
+#  SEGREDOS / AMBIENTE
+# =============================================================
+.env
+.env.*
+!.env.example                  # o template fica versionado
+
+# =============================================================
+#  PYTHON
+# =============================================================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# =============================================================
+#  TESTES / QUALIDADE
+# =============================================================
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# =============================================================
+#  NOTEBOOKS
+# =============================================================
+.ipynb_checkpoints/
+# Nota: notebooks/tx_cong_mensal.ipynb É versionado (documentação/consulta).
+
+# =============================================================
+#  AIRFLOW (execução local)
+# =============================================================
+logs/
+airflow.db
+airflow.cfg
+standalone_admin_password.txt
+
+# =============================================================
+#  IDE / SO
+# =============================================================
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
