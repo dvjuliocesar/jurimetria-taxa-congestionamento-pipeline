@@ -1,0 +1,69 @@
+# Regras de negócio e caminhos do pipeline (versionado no GitLab).
+# Qualquer chave omitida aqui usa o default definido em src/config.py.
+
+# --- Zonas de dados ---
+raw_dir: "data/01_raw"
+trusted_dir: "data/02_trusted"
+refined_dir: "data/03_refined"
+trusted_filename: "core_processos.parquet"
+serie_filename: "serie_tx_cong.parquet"
+payload_filename: "payload_tx_mensal.json"
+
+# --- Leitura dos CSVs brutos ---
+csv_sep: "#"
+csv_encoding: "utf-8-sig"
+raw_glob_pattern: "analise_txcg_*.csv"
+
+# --- Arquivamento dos CSVs já incorporados à trusted ---
+# Move-os para data/01_raw/processados/<timestamp>/ após uma execução com
+# sucesso, para que a próxima execução não precise relê-los. Seguro: a
+# trusted já persiste tudo cumulativamente (ver src/pipeline.py).
+auto_archive: true
+processed_subdir: "processados"
+
+# --- Faixa plausível de anos (só para a auto-detecção do intervalo) ---
+# Datas de distribuição/baixa fora daqui são tratadas como erro de digitação
+# na origem e ignoradas SÓ na hora de decidir automaticamente onde começar/
+# terminar. Não afeta a trusted nem o cálculo normal. Ajuste conforme a
+# realidade real do seu tribunal, se necessário.
+ano_minimo_plausivel: 1990
+ano_maximo_plausivel: 2100
+
+# --- Piso fixo do intervalo automático ---
+# Só age na primeiríssima execução (sem série ainda). Garante que o backfill
+# nunca comece antes disso, mesmo que a distribuição real mais antiga nos
+# dados seja anterior. Deixe null para não ter piso (usa o mínimo real).
+desde_fixo: "2020-01"
+
+# --- Modelo de dados ---
+keys:
+  - comarca
+  - serventia
+# Descomente se os IDs estáveis existirem no CSV bruto (recomendado):
+# id_columns:
+#   - comarca_id
+#   - serventia_id
+id_columns: []
+date_columns:
+  - data_distribuicao
+  - data_baixa
+required_columns:
+  - processo_id
+  - comarca
+  - serventia
+  - data_distribuicao
+  - data_baixa
+
+# --- Regra da métrica ---
+rolling_window_months: 12
+
+# --- Contrato / payload ---
+schema_version: "1.0.0"
+contract_path: "contracts/payload.schema.json"
+validate_payload: true
+
+# --- Competências FIXAS (opcional) ---
+# Deixe vazia para o pipeline detectar automaticamente o intervalo que falta
+# processar (recomendado). Só preencha se quiser travar um conjunto fixo de
+# meses independente do que --desde/--ate calculariam.
+competencias: []
