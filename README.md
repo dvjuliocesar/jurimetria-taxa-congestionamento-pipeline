@@ -7,28 +7,51 @@ downstream (EDA, previsão de 3/6/12 meses e dashboard).
 
 ## Sumário
 
+- [Requisitos](#requisitos)
 - [Como rodar](#como-rodar)
 - [O que o pipeline faz](#o-que-o-pipeline-faz)
+- [Formato esperado do CSV bruto](#formato-esperado-do-csv-bruto)
 - [Estrutura do projeto](#estrutura-do-projeto)
 - [Configuração](#configuração-configsettingsyaml)
 - [Argumentos de linha de comando](#argumentos-de-linha-de-comando)
 - [A métrica](#a-métrica)
 - [Incrementalidade e imutabilidade histórica](#incrementalidade-e-imutabilidade-histórica)
+- [Execução recorrente (agendamento)](#execução-recorrente-agendamento)
 - [Arquivamento automático dos CSVs](#arquivamento-automático-dos-csvs)
 - [Qualidade de dados](#qualidade-de-dados)
+- [Privacidade dos dados](#privacidade-dos-dados)
 - [O payload JSON](#o-payload-json)
+- [Notebooks](#notebooks)
 - [Solução de problemas](#solução-de-problemas)
+- [Licença](#licença)
 
 ---
+
+## Requisitos
+
+- **Python 3.10+** (o projeto usa sintaxe de tipos moderna, ex. `str | None`;
+  desenvolvido/testado com Python 3.13).
+- `pip` para instalar as dependências de `requirements.txt`.
+- Nenhum banco de dados externo é necessário — as zonas `trusted` e `refined`
+  são arquivos Parquet locais.
 
 ## Como rodar
 
 ```bash
+# (recomendado) crie e ative um ambiente virtual
+python -m venv .venv
+
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+# Linux/macOS
+source .venv/bin/activate
+
 pip install -r requirements.txt
 ```
 
 Coloque o(s) CSV(s) brutos em `data/01_raw/` (o nome deve casar com
-`raw_glob_pattern` do `settings.yaml` — hoje `analise_txcg_*.csv`), depois:
+`raw_glob_pattern` do `settings.yaml` — hoje `analise_txcg_*.csv`; ver
+[formato esperado do CSV](#formato-esperado-do-csv-bruto)), depois:
 
 ```bash
 python -m src.main
@@ -43,6 +66,19 @@ calcular — não é preciso informar datas manualmente no dia a dia. Ele:
 4. calcula a taxa de congestionamento para esse intervalo;
 5. gera e valida o payload JSON;
 6. arquiva os CSVs já processados, para a próxima execução não relê-los.
+
+Na primeira execução bem-sucedida, o log mostra algo como:
+
+```
+INFO | Ingestão: 1 ficheiro(s) em data/01_raw
+INFO | Trusted: 41523 processos únicos -> data/02_trusted/core_processos.parquet
+INFO | Competências auto-detectadas: 2020-01 .. 2025-12 (72 meses)
+INFO | Refined: série completa com 72 linhas -> data/03_refined/serie_tx_cong.parquet
+INFO | Contrato: payload válido.
+INFO | Payload gravado -> data/03_refined/payload_tx_mensal.json (72 registos)
+INFO | 1 arquivo(s) bruto(s) arquivado(s) em data/01_raw/processados
+INFO | Concluído. JSON pronto para o pipeline downstream.
+```
 
 ## O que o pipeline faz
 
@@ -59,24 +95,54 @@ data/03_refined/serie_tx_cong.parquet    (série histórica completa, por compet
 data/03_refined/payload_tx_mensal.json   (entregável para o pipeline downstream)
 ```
 
+## Formato esperado do CSV bruto
+
+O leitor (`pipeline.py`, via `csv_sep`/`csv_encoding` do `settings.yaml`) espera:
+
+| Aspecto | Valor padrão | Onde muda |
+|---|---|---|
+| Separador de campos | `#` (não é vírgula nem `;`) | `csv_sep` |
+| Encoding | `utf-8-sig` | `csv_encoding` |
+| Nome do arquivo | casa com `analise_txcg_*.csv` | `raw_glob_pattern` |
+
+O arquivo pode ter quantas colunas o extrato original trouxer — só as listadas
+em `required_columns` (+ `id_columns`, se configuradas) são lidas; o resto é
+ignorado (`usecols`), então não é preciso "limpar" o CSV antes de soltá-lo em
+`data/01_raw/`. As colunas mínimas exigidas hoje (ver `required_columns` em
+`config/settings.yaml`) são:
+
+| Coluna | Tipo | Observação |
+|---|---|---|
+| `processo_id` | inteiro/string | chave de upsert — 1 linha por processo na trusted |
+| `comarca` | texto | chave de agrupamento da taxa |
+| `serventia` | texto | chave de agrupamento da taxa |
+| `data_distribuicao` | data (`YYYY-MM-DD`) | obrigatória; linhas sem ela são descartadas na limpeza |
+| `data_baixa` | data (`YYYY-MM-DD`) ou vazia | vazia = processo ainda pendente (estoque) |
+
+Se o CSV não tiver alguma coluna exigida, a ingestão falha cedo com
+`SchemaError`, antes de tocar na trusted.
+
 ## Estrutura do projeto
 
 ```
-jurimetria-pipeline/
+jurimetria-taxa-congestionamento-pipeline/
 ├── config/
 │   └── settings.yaml            # regras de negócio (fora do código)
 ├── contracts/
 │   └── payload.schema.json      # contrato do JSON, compartilhado com o downstream
-├── data/                        # zonas de dados (git-ignoradas)
+├── data/                        # zonas de dados (git-ignoradas, ver LGPD)
 │   ├── 01_raw/                  #   CSVs brutos chegam aqui
 │   │   └── processados/         #   CSVs já incorporados à trusted (arquivo automático)
 │   ├── 02_trusted/              #   core_processos.parquet
 │   └── 03_refined/              #   serie_tx_cong.parquet + payload_tx_mensal.json
+├── notebooks/
+│   └── tx_cong_mensal.ipynb     # exploração/EDA ad-hoc (não faz parte da execução produtiva)
 ├── src/
 │   ├── main.py                  # ponto de entrada / CLI
 │   ├── pipeline.py              # limpeza, upsert, cálculo, payload
 │   ├── config.py                # carga do settings.yaml
 │   └── payload_validator.py     # valida o JSON contra o contrato antes de publicar
+├── LICENSE                      # MIT
 └── requirements.txt
 ```
 
@@ -146,6 +212,25 @@ calculado antes permanece intacto em `serie_tx_cong.parquet` — uma baixa nova
 em 2026 nunca altera o retrato de 2024, por exemplo, porque o estoque de um
 mês passado nunca conta baixas de meses futuros a ele.
 
+## Execução recorrente (agendamento)
+
+Como a auto-detecção de competências é incremental e cada competência é
+calculada de forma absoluta e idempotente (ver seção anterior), é seguro
+agendar `python -m src.main` para rodar periodicamente (cron, Task
+Scheduler, Airflow, etc.) sempre que novos extratos chegarem em
+`data/01_raw/`:
+
+- Se não houver CSV novo, o pipeline reaproveita a trusted existente e
+  recalcula apenas o que faltar (ou não faz nada, se já estiver tudo em dia).
+- Rodar duas vezes seguidas sem CSV novo é inofensivo — não há efeito
+  colateral além de regravar o mesmo payload.
+- Não é preciso limpar `data/01_raw/` manualmente entre execuções: o
+  [arquivamento automático](#arquivamento-automático-dos-csvs) cuida disso.
+
+O projeto não inclui uma DAG/orquestrador pronto — o `.gitignore` só reserva
+espaço para artefactos de uma instância local de Airflow (`airflow.db`,
+`logs/`, etc.), caso você opte por orquestrar a execução dessa forma.
+
 ## Arquivamento automático dos CSVs
 
 Ao final de uma execução bem-sucedida, os CSVs de `data/01_raw/` que acabaram
@@ -176,6 +261,16 @@ for col in ["data_distribuicao", "data_baixa"]:
 # Baixa antes da distribuição (logicamente impossível)
 print((df.data_baixa.notna() & (df.data_baixa < df.data_distribuicao)).sum())
 ```
+
+## Privacidade dos dados
+
+Os extratos brutos contêm dados de processos judiciais e não são versionados:
+`data/01_raw/`, `data/02_trusted/` e `data/03_refined/` estão no `.gitignore`
+(reforçado por extensão para `*.csv`/`*.parquet`), assim como o payload
+gerado. Só o **contrato** (`contracts/payload.schema.json`) — que não contém
+dados, apenas a estrutura — é versionado. Ao configurar um novo ambiente,
+essas pastas precisam ser recriadas/povoadas localmente (os `.gitkeep`
+garantem que a estrutura de pastas exista mesmo vazia).
 
 ## O payload JSON
 
@@ -214,6 +309,14 @@ recém-calculadas) — o pipeline downstream de previsão precisa do histórico
 inteiro para projetar 3/6/12 meses. O contrato completo está em
 `contracts/payload.schema.json` e é validado antes de cada publicação.
 
+## Notebooks
+
+`notebooks/tx_cong_mensal.ipynb` é um notebook de exploração/EDA ad-hoc sobre
+os dados brutos (usa `matplotlib`, por isso ele está em `requirements.txt`
+mesmo não sendo usado por `src/`). Ele não faz parte da execução produtiva do
+pipeline (`python -m src.main`) e não é necessário para gerar o payload —
+serve apenas para investigação manual dos dados.
+
 ## Solução de problemas
 
 **`ValueError: Nenhum CSV encontrado ... e ainda não existe trusted persistida`**
@@ -236,3 +339,21 @@ python -m src.main --competencias 2025-06
 O payload não foi gravado; o JSON anterior (se houver) permanece válido. Veja
 a mensagem de erro para o campo específico que falhou contra
 `contracts/payload.schema.json`.
+
+**`SchemaError: colunas em falta [...]`**
+O CSV bruto não tem alguma coluna listada em `required_columns` (ver
+[formato esperado do CSV](#formato-esperado-do-csv-bruto)). Confira o
+cabeçalho do arquivo e o `csv_sep`/`csv_encoding` configurados — um
+separador errado faz o pandas ler tudo como uma única coluna.
+
+**`ModuleNotFoundError` ou validação/config "ignorada silenciosamente"**
+`pyyaml` e `jsonschema` são declarados como dependências opcionais no
+código (`src/config.py`, `src/payload_validator.py`): sem eles, o pipeline
+roda com os defaults embutidos e pula a validação de contrato, respectivamente,
+emitindo apenas um aviso. Rode `pip install -r requirements.txt` para
+garantir que ambos estejam presentes e o comportamento documentado neste
+README (validação e `settings.yaml` ativos) valha de fato.
+
+## Licença
+
+[MIT](LICENSE).
